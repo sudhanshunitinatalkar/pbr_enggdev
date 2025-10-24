@@ -10,21 +10,7 @@ import paho.mqtt.client as mqtt
 from datetime import datetime
 
 # --- Constants ---
-LOGIN_URL = "https://cloud.enggenv.com/android_login.php"
-HOME_URL = "https://cloud.enggenv.com/home.php"
-# This is the AJAX endpoint that returns JSON data!
-AAQ_DATA_URL = "https://cloud.enggenv.com/aaq/aaq_all_para.php"
-
-MQTT_HOST = "cloud.pbrresearch.com"
-MQTT_PORT = 1883
-MQTT_TOPIC = "display/data/317050011"
-
-# Device IDs
-DEVICE_MILL_1 = "ENE03225"
-DEVICE_MILL_2 = "ENE02822"
-
-# Loop interval in seconds
-LOOP_INTERVAL = 60
+# All constants are now loaded from .env file via load_config()
 
 
 def setup_debug_logging():
@@ -46,15 +32,46 @@ def setup_debug_logging():
 def load_config():
     """Loads configuration from .env file."""
     load_dotenv()
-    config = {
+    
+    # Load all env vars as strings first
+    config_str = {
         "web_user": os.getenv("WEB_USERNAME"),
         "web_pass": os.getenv("WEB_PASSWORD"),
         "mqtt_user": os.getenv("MQTT_USER"),
         "mqtt_pass": os.getenv("MQTT_PASS"),
+        "login_url": os.getenv("LOGIN_URL"),
+        "home_url": os.getenv("HOME_URL"),
+        "aaq_data_url": os.getenv("AAQ_DATA_URL"),
+        "mqtt_host": os.getenv("MQTT_HOST"),
+        "mqtt_port_str": os.getenv("MQTT_PORT"),
+        "mqtt_topic": os.getenv("MQTT_TOPIC"),
+        "device_mill_1": os.getenv("DEVICE_MILL_1"),
+        "device_mill_2": os.getenv("DEVICE_MILL_2"),
+        "loop_interval_str": os.getenv("LOOP_INTERVAL"),
     }
-    if not all(config.values()):
-        print("Error: Missing one or more .env variables.")
+    
+    # Check for any missing values
+    if not all(config_str.values()):
+        missing_keys = [key for key, value in config_str.items() if value is None]
+        print(f"Error: Missing one or more .env variables: {missing_keys}")
         sys.exit(1)
+        
+    # Copy string values
+    config = config_str.copy()
+        
+    # Try type conversions for integer values
+    try:
+        config["mqtt_port"] = int(config_str["mqtt_port_str"])
+        config["loop_interval"] = int(config_str["loop_interval_str"])
+    except ValueError as e:
+        print(f"Error: Invalid integer in .env file. Check MQTT_PORT or LOOP_INTERVAL. {e}")
+        sys.exit(1)
+        
+    # Clean up temporary string versions
+    del config["mqtt_port_str"]
+    del config["loop_interval_str"]
+    
+    print("✓ Configuration loaded successfully from .env")
     return config
 
 
@@ -75,7 +92,7 @@ def login_to_site(config):
     }
     
     try:
-        response = session.post(LOGIN_URL, data=login_payload)
+        response = session.post(config["login_url"], data=login_payload)
         response.raise_for_status() 
         print(f"Login POST complete. Landed on URL: {response.url}")
         
@@ -91,7 +108,7 @@ def login_to_site(config):
         return None
 
 
-def scrape_device_data(session, device_id, device_name):
+def scrape_device_data(session, device_id, device_name, config):
     """
     Fetches device data from the AJAX endpoint that returns JSON.
     This is the endpoint called by the JavaScript aaq() function.
@@ -106,13 +123,13 @@ def scrape_device_data(session, device_id, device_name):
         'X-Requested-With': 'XMLHttpRequest',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Referer': HOME_URL,
+        'Referer': config["home_url"],
         'Origin': 'https://cloud.enggenv.com'
     }
     
     try:
-        print(f"Calling AJAX endpoint: {AAQ_DATA_URL}")
-        response = session.post(AAQ_DATA_URL, data=payload, headers=ajax_headers)
+        print(f"Calling AJAX endpoint: {config['aaq_data_url']}")
+        response = session.post(config["aaq_data_url"], data=payload, headers=ajax_headers)
         response.raise_for_status()
         
         print(f"Response status: {response.status_code}")
@@ -179,7 +196,7 @@ def publish_to_mqtt(config, mill_1_value, mill_2_value):
     print("\n" + "="*50)
     print("MQTT PUBLISHING")
     print("="*50)
-    print(f"Topic: {MQTT_TOPIC}")
+    print(f"Topic: {config['mqtt_topic']}")
     print(f"Message: {message}")
     print("="*50)
     
@@ -189,10 +206,10 @@ def publish_to_mqtt(config, mill_1_value, mill_2_value):
         client.username_pw_set(config["mqtt_user"], config["mqtt_pass"])
         
         print("Connecting to MQTT broker...")
-        client.connect(MQTT_HOST, MQTT_PORT, 60)
+        client.connect(config["mqtt_host"], config["mqtt_port"], 60)
         client.loop_start() 
         
-        result = client.publish(MQTT_TOPIC, message)
+        result = client.publish(config["mqtt_topic"], message)
         result.wait_for_publish(timeout=5)
         
         if result.is_published():
@@ -213,8 +230,8 @@ def run_cycle(config, session):
     print(f"STARTING NEW CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*60}")
     
-    val_mill_2 = scrape_device_data(session, DEVICE_MILL_2, "MILL_2")
-    val_mill_1 = scrape_device_data(session, DEVICE_MILL_1, "MILL_1")
+    val_mill_2 = scrape_device_data(session, config["device_mill_2"], "MILL_2", config)
+    val_mill_1 = scrape_device_data(session, config["device_mill_1"], "MILL_1", config)
     
     if val_mill_1 and val_mill_2:
         publish_to_mqtt(config, val_mill_1, val_mill_2)
@@ -236,7 +253,7 @@ def main():
     print("\n" + "="*60)
     print("MQTT DATA PUBLISHER - CONTINUOUS MODE")
     print("="*60)
-    print(f"Loop interval: {LOOP_INTERVAL} seconds")
+    print(f"Loop interval: {config['loop_interval']} seconds")
     print(f"Press Ctrl+C to stop")
     print("="*60 + "\n")
     
@@ -264,9 +281,9 @@ def main():
                     print("✗ Re-login failed. Waiting before retry...")
             
             # Wait for the next cycle
-            print(f"\n💤 Waiting {LOOP_INTERVAL} seconds until next cycle...")
-            print(f"Next cycle at: {datetime.fromtimestamp(time.time() + LOOP_INTERVAL).strftime('%Y-%m-%d %H:%M:%S')}")
-            time.sleep(LOOP_INTERVAL)
+            print(f"\n💤 Waiting {config['loop_interval']} seconds until next cycle...")
+            print(f"Next cycle at: {datetime.fromtimestamp(time.time() + config['loop_interval']).strftime('%Y-%m-%d %H:%M:%S')}")
+            time.sleep(config['loop_interval'])
             
     except KeyboardInterrupt:
         print("\n\n" + "="*60)
